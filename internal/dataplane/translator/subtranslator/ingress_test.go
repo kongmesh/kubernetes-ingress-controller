@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/kong/go-kong/kong"
 	"github.com/stretchr/testify/assert"
@@ -1294,6 +1295,7 @@ func TestTranslateIngress(t *testing.T) {
 					ExpressionRoutes: false,
 				},
 				noopObjectsCollector{},
+				logr.Discard(),
 			), checkOnlyObjectMeta)
 			require.Empty(t, diff, "expected no difference between expected and translated ingress")
 		})
