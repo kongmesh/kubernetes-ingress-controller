@@ -80,8 +80,8 @@ func TestPluginEssentials(t *testing.T) {
 			Namespace: ns.Name,
 			Name:      "teapot",
 		},
-		InstanceName: "example",
-		PluginName:   "request-termination",
+		// InstanceName: "example",
+		PluginName: "request-termination",
 		Config: apiextensionsv1.JSON{
 			Raw: []byte(`{"status_code": 418}`),
 		},
@@ -93,8 +93,8 @@ func TestPluginEssentials(t *testing.T) {
 				annotations.IngressClassKey: consts.IngressClass,
 			},
 		},
-		InstanceName: "example-cluster",
-		PluginName:   "request-termination",
+		// InstanceName: "example-cluster",
+		PluginName: "request-termination",
 		Config: apiextensionsv1.JSON{
 			Raw: []byte(`{"status_code": 451}`),
 		},
