@@ -77,7 +77,7 @@ func (s UpdateStrategyDBMode) Update(ctx context.Context, targetContent ContentW
 		return fmt.Errorf("creating a new syncer for %s: %w", s.client.BaseRootURL(), err), nil, nil
 	}
 
-	_, errs, _ := syncer.Solve(ctx, s.concurrency, false, false)
+	_, errs, _ := syncer.Solve(ctx, s.concurrency, false, true)
 	if errs != nil {
 		return deckutils.ErrArray{Errors: errs}, nil, nil
 	}
