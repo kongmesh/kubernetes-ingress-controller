@@ -8,6 +8,9 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/samber/lo"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,10 +55,15 @@ type HTTPRouteReconciler struct {
 	// If it is false, referencing backend in different namespace will be rejected.
 	// It's resolved on SetupWithManager call.
 	enableReferenceGrant bool
+	tracer               trace.Tracer
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.tracer = otel.GetTracerProvider().Tracer("internal/controllers/gateway")
+	_, span := r.tracer.Start(context.TODO(), "SetupWithManager")
+	defer span.End()
+
 	c, err := controller.New("httproute-controller", mgr, controller.Options{
 		Reconciler: r,
 		LogConstructor: func(_ *reconcile.Request) logr.Logger {
@@ -333,6 +341,9 @@ func (r *HTTPRouteReconciler) listHTTPRoutesForGateway(ctx context.Context, obj 
 func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("GatewayV1HTTPRoute", req.NamespacedName)
 
+	ctx, span := r.tracer.Start(ctx, "HTTPRoute-Reconcile")
+	defer span.End()
+
 	httproute := new(gatewayapi.HTTPRoute)
 	if err := r.Get(ctx, req.NamespacedName, httproute); err != nil {
 		// if the queued object is no longer present in the proxy cache we need
@@ -348,7 +359,10 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
+	span.SetAttributes(attribute.String("httprouteName", httproute.Name), attribute.String("httprouteNamespace", httproute.Namespace))
+
 	debug(log, httproute, "Processing httproute")
+	span.AddEvent("Processing httproute")
 
 	// if there's a present deletion timestamp then we need to update the proxy cache
 	// to drop all relevant routes from its configuration, regardless of whether or
@@ -416,12 +430,14 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if isRouteAccepted(gateways) && err == nil {
 		// if the gateways are ready, and the HTTPRoute is destined for them, ensure that
 		// the object is pushed to the dataplane.
+		span.AddEvent("Route is accepted")
 		if err := r.DataplaneClient.UpdateObject(filteredHTTPRoute); err != nil {
 			debug(log, httproute, "Failed to update object in data-plane, requeueing")
 			return ctrl.Result{}, err
 		}
 	} else {
 		// route is not accepted, remove it from kong store
+		span.AddEvent("Route is not accepted")
 		if err := r.DataplaneClient.DeleteObject(httproute); err != nil {
 			debug(log, httproute, "Failed to delete object in data-plane, requeueing")
 			return ctrl.Result{}, err
@@ -493,6 +509,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// once the data-plane has accepted the HTTPRoute object, we're all set.
 	info(log, httproute, "HTTPRoute has been configured on the data-plane")
+	span.AddEvent("HTTPRoute has been configured on the data-plane")
 
 	return ctrl.Result{}, nil
 }
@@ -509,6 +526,8 @@ var httprouteParentKind = "Gateway"
 // considered "attached" to a given HTTPRoute and ensures that the status
 // for the HTTPRoute is updated appropriately.
 func (r *HTTPRouteReconciler) ensureGatewayReferenceStatusAdded(ctx context.Context, httproute *gatewayapi.HTTPRoute, gateways ...supportedGatewayWithCondition) (bool, error) {
+	ctx, span := r.tracer.Start(ctx, "ensureGatewayReferenceStatusAdded")
+	defer span.End()
 	// map the existing parentStatues to avoid duplications
 	parentStatuses := getParentStatuses(httproute, httproute.Status.Parents)
 
@@ -603,6 +622,8 @@ func (r *HTTPRouteReconciler) ensureGatewayReferenceStatusAdded(ctx context.Cont
 // implementation to prune status references to Gateways supported by this controller
 // in the provided HTTPRoute object.
 func (r *HTTPRouteReconciler) ensureGatewayReferenceStatusRemoved(ctx context.Context, httproute *gatewayapi.HTTPRoute) (bool, error) {
+	_, span := r.tracer.Start(ctx, "ensureGatewayReferenceStatusRemoved")
+	defer span.End()
 	// drop all status references to supported Gateway objects
 	newStatuses := make([]gatewayapi.RouteParentStatus, 0)
 	for _, status := range httproute.Status.Parents {
@@ -633,6 +654,9 @@ func (r *HTTPRouteReconciler) setRouteConditionResolvedRefsCondition(
 	httpRoute *gatewayapi.HTTPRoute,
 	parentStatuses map[string]*gatewayapi.RouteParentStatus,
 ) (map[string]*gatewayapi.RouteParentStatus, bool, error) {
+	ctx, span := r.tracer.Start(ctx, "setRouteConditionResolvedRefsCondition")
+	defer span.End()
+
 	var changed bool
 	resolvedRefsStatus := metav1.ConditionFalse
 	reason, err := r.getHTTPRouteRuleReason(ctx, *httpRoute)
@@ -675,6 +699,9 @@ func (r *HTTPRouteReconciler) setRouteConditionResolvedRefsCondition(
 }
 
 func (r *HTTPRouteReconciler) getHTTPRouteRuleReason(ctx context.Context, httpRoute gatewayapi.HTTPRoute) (gatewayapi.RouteConditionReason, error) {
+	ctx, span := r.tracer.Start(ctx, "getHTTPRouteRuleReason")
+	defer span.End()
+
 	for _, rule := range httpRoute.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
 			backendNamespace := httpRoute.Namespace

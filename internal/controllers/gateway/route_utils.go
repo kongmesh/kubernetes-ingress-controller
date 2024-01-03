@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/samber/lo"
 	"github.com/samber/mo"
+	"go.opentelemetry.io/otel"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -126,6 +127,8 @@ func parentRefsForRoute[T gatewayapi.RouteT](route T) ([]gatewayapi.ParentRefere
 // client if they match this controller. If there are no gateways present for this route
 // OR the present gateways are references to missing objects, this will return a unsupportedGW error.
 func getSupportedGatewayForRoute[T gatewayapi.RouteT](ctx context.Context, logger logr.Logger, mgrc client.Client, route T) ([]supportedGatewayWithCondition, error) {
+	_, span := otel.GetTracerProvider().Tracer("internal/controllers/gateway").Start(ctx, "getSupportedGatewayForRoute")
+	defer span.End()
 	// gather the parentrefs for this route object
 	parentRefs, err := parentRefsForRoute(route)
 	if err != nil {
@@ -278,6 +281,7 @@ func getSupportedGatewayForRoute[T gatewayapi.RouteT](ctx context.Context, logge
 		}
 
 		if matched {
+			span.AddEvent("Found a matched listener for route")
 			var listenerName string
 			if parentRef.SectionName != nil && *parentRef.SectionName != "" {
 				listenerName = string(*parentRef.SectionName)
@@ -294,6 +298,7 @@ func getSupportedGatewayForRoute[T gatewayapi.RouteT](ctx context.Context, logge
 				},
 			})
 		} else {
+			span.AddEvent("Failed to match a listener with route")
 			// We failed to match a listener with this route
 
 			// This will also catch a case of not matching listener/section name.
@@ -762,6 +767,9 @@ func ensureParentsProgrammedCondition[
 	gateways []supportedGatewayWithCondition,
 	condition metav1.Condition,
 ) (bool, error) {
+	_, span := otel.GetTracerProvider().Tracer("internal/controllers/gateway").Start(ctx, "ensureParentsProgrammedCondition")
+	defer span.End()
+
 	// map the existing parentStatues to avoid duplications
 	parentStatuses := getParentStatuses(route, routeParentStatuses)
 

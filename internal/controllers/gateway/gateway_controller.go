@@ -11,6 +11,8 @@ import (
 	"github.com/kong/go-kong/kong"
 	"github.com/samber/lo"
 	"github.com/samber/mo"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,10 +60,15 @@ type GatewayReconciler struct { //nolint:revive
 	// to invalidate or allow cross-namespace TLSConfigs in gateways.
 	// It's resolved on SetupWithManager call.
 	enableReferenceGrant bool
+	tracer               trace.Tracer
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.tracer = otel.GetTracerProvider().Tracer("internal/controllers/gateway")
+	_, span := r.tracer.Start(context.TODO(), "SetupWithManager")
+	defer span.End()
+
 	// verify that the PublishService was configured properly
 	if r.PublishServiceRef.Name == "" || r.PublishServiceRef.Namespace == "" {
 		return fmt.Errorf("publish service must be configured")
@@ -326,6 +333,9 @@ func referenceGrantHasGatewayFrom(obj client.Object) bool {
 // move the current state of the cluster closer to the desired state.
 func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("GatewayV1Gateway", req.NamespacedName)
+
+	ctx, span := r.tracer.Start(ctx, "Gateway-Reconcile")
+	defer span.End()
 
 	// gather the gateway object based on the reconciliation trigger. It's possible for the object
 	// to be gone at this point in which case it will be ignored.
