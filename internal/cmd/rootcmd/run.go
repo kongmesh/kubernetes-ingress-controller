@@ -43,7 +43,7 @@ func RunWithLogger(ctx context.Context, c *manager.Config, logger logr.Logger) e
 	}
 
 	// Create a new tracer provider with the given exporter.
-	tp := telemetries.NewTraceProvider(exp)
+	tp := telemetries.NewTraceProvider("kong-kic", exp)
 
 	// Handle shutdown properly so nothing leaks.
 	defer func() { _ = tp.Shutdown(ctx) }()
