@@ -27,6 +27,9 @@ func KongRawStateToKongState(rawstate *utils.KongRawState) *kongstate.KongState 
 
 	pluginsByService := make(map[string][]*kong.Plugin)
 	pluginsByRoute := make(map[string][]*kong.Plugin)
+	pluginsByConsumer := make(map[string][]*kong.Plugin)
+	pluginsByConsumerGroup := make(map[string][]*kong.Plugin)
+	var globalPlugins []*kong.Plugin
 	for _, p := range rawstate.Plugins {
 		if p.Service != nil && p.Service.ID != nil {
 			pluginsByService[*p.Service.ID] = append(pluginsByService[*p.Service.ID], p)
@@ -34,9 +37,16 @@ func KongRawStateToKongState(rawstate *utils.KongRawState) *kongstate.KongState 
 		if p.Route != nil && p.Route.ID != nil {
 			pluginsByRoute[*p.Route.ID] = append(pluginsByRoute[*p.Route.ID], p)
 		}
+		if p.Consumer != nil && p.Consumer.ID != nil {
+			pluginsByConsumer[*p.Consumer.ID] = append(pluginsByConsumer[*p.Consumer.ID], p)
+		}
+		if p.Service == nil && p.Route == nil && p.Consumer == nil && p.ConsumerGroup == nil {
+			globalPlugins = append(globalPlugins, p)
+		}
 	}
 
 	for _, cg := range rawstate.ConsumerGroups {
+		if cg.ConsumerGroup.
 		kongState.ConsumerGroups = append(kongState.ConsumerGroups, kongstate.ConsumerGroup{ConsumerGroup: sanitizeConsumerGroup(*cg.ConsumerGroup)})
 	}
 
@@ -79,9 +89,12 @@ func KongRawStateToKongState(rawstate *utils.KongRawState) *kongstate.KongState 
 	kongState.Certificates = rawCertificatesToCertificates(rawstate.Certificates)
 
 	for i, consumer := range rawstate.Consumers {
-		kongState.Consumers = append(kongState.Consumers, kongstate.Consumer{
+		consumer := kongstate.Consumer{
 			Consumer: sanitizeConsumer(*consumer),
-		})
+		}
+		if consumer.ID != nil && pluginsByConsumer[*consumer.ID] != nil {
+			consumer.Plugins = rawPluginsToPlugins(pluginsByConsumer[*consumer.ID])
+		}
 		for _, keyAuth := range rawstate.KeyAuths {
 			if keyAuth.Consumer != nil {
 				if *keyAuth.Consumer.ID == *consumer.ID {
