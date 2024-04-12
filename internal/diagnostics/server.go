@@ -156,6 +156,7 @@ func installProfilingHandlers(mux *http.ServeMux) {
 
 // installDumpHandlers adds the config dump webservice to the given mux.
 func (s *Server) installDumpHandlers(mux *http.ServeMux) {
+	s.logger.V(util.DebugLevel).Info("Installing config dump handlers")
 	mux.HandleFunc("/debug/config/successful", s.handleLastValidConfig)
 	mux.HandleFunc("/debug/config/failed", s.handleLastFailedConfig)
 	mux.HandleFunc("/debug/config/raw-error", s.handleLastErrBody)
