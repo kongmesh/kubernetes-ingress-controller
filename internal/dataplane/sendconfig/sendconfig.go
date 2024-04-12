@@ -46,8 +46,8 @@ type AdminAPIClient interface {
 type UpdateError struct {
 	// RawBody is the original Kong HTTP error response body from a failed update.
 	RawBody []byte
-	// ResourceFailures are per-resource failures from a Kong configuration update attempt.
-	ResourceFailures []failures.ResourceFailure
+	// EntityErrors are per-resource failures from a Kong configuration update attempt.
+	EntityErrors []FlatEntityError
 	// Err is an overall description of the update failure.
 	Err error
 }
@@ -71,7 +71,7 @@ func PerformUpdate(
 	oldSHA := client.LastConfigSHA()
 	newSHA, err := deckgen.GenerateSHA(targetContent)
 	if err != nil {
-		return oldSHA, UpdateError{ResourceFailures: []failures.ResourceFailure{}, Err: err}
+		return oldSHA, UpdateError{EntityErrors: nil, Err: err}
 	}
 
 	// disable optimization if reverse sync is enabled
@@ -93,7 +93,7 @@ func PerformUpdate(
 	updateStrategy := updateStrategyResolver.ResolveUpdateStrategy(client)
 	logger = logger.WithValues("update_strategy", updateStrategy.Type())
 	timeStart := time.Now()
-	err, resourceErrors, rawErrBody, resourceErrorsParseErr := updateStrategy.Update(ctx, ContentWithHash{
+	err, entityErrors, rawErrBody := updateStrategy.Update(ctx, ContentWithHash{
 		Content: targetContent,
 		Hash:    newSHA,
 	})
@@ -106,9 +106,10 @@ func PerformUpdate(
 			return nil, UpdateError{RawBody: rawErrBody, Err: err}
 		}
 
-		resourceFailures := resourceErrorsToResourceFailures(resourceErrors, resourceErrorsParseErr, logger)
+		resourceErrors := ResourceErrorsFromEntityErrors(entityErrors, logger)
+		resourceFailures := ResourceErrorsToResourceFailures(resourceErrors, logger)
 		promMetrics.RecordPushFailure(metricsProtocol, duration, client.BaseRootURL(), len(resourceFailures), err)
-		return nil, UpdateError{ResourceFailures: resourceFailures, RawBody: rawErrBody, Err: err}
+		return nil, UpdateError{EntityErrors: entityErrors, RawBody: rawErrBody, Err: err}
 	}
 
 	promMetrics.RecordPushSuccess(metricsProtocol, duration, client.BaseRootURL())
@@ -126,14 +127,9 @@ func PerformUpdate(
 // Sendconfig - Private Functions
 // -----------------------------------------------------------------------------
 
-// resourceErrorsToResourceFailures translates a slice of ResourceError to a slice of failures.ResourceFailure.
+// ResourceErrorsToResourceFailures translates a slice of ResourceError to a slice of failures.ResourceFailure.
 // In case of parseErr being not nil, it just returns a nil slice.
-func resourceErrorsToResourceFailures(resourceErrors []ResourceError, parseErr error, logger logr.Logger) []failures.ResourceFailure {
-	if parseErr != nil {
-		logger.Error(parseErr, "Failed parsing resource errors")
-		return nil
-	}
-
+func ResourceErrorsToResourceFailures(resourceErrors []ResourceError, logger logr.Logger) []failures.ResourceFailure {
 	var out []failures.ResourceFailure
 	for _, ee := range resourceErrors {
 		obj := metav1.PartialObjectMetadata{

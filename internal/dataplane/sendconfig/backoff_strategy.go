@@ -47,17 +47,18 @@ func NewUpdateStrategyWithBackoff(
 // In case it's not, it will return a predefined ErrUpdateSkippedDueToBackoffStrategy.
 // In case it is, apart from calling UpdateStrategy.Update, it will also register a success or a failure of an update
 // attempt so that the UpdateBackoffStrategy can keep track of it.
+//
+//nolint:revive
 func (s UpdateStrategyWithBackoff) Update(ctx context.Context, targetContent ContentWithHash) (
 	err error,
-	resourceErrors []ResourceError,
+	resourceErrors []FlatEntityError,
 	rawErrBody []byte,
-	resourceErrorsParseErr error,
 ) {
 	if canUpdate, whyNot := s.backoffStrategy.CanUpdate(targetContent.Hash); !canUpdate {
-		return NewUpdateSkippedDueToBackoffStrategyError(whyNot), nil, nil, nil
+		return NewUpdateSkippedDueToBackoffStrategyError(whyNot), nil, nil
 	}
 
-	err, resourceErrors, rawErrBody, resourceErrorsParseErr = s.decorated.Update(ctx, targetContent)
+	err, resourceErrors, rawErrBody = s.decorated.Update(ctx, targetContent)
 	if err != nil {
 		s.logger.V(util.DebugLevel).Info("Update failed, registering it for backoff strategy", "reason", err.Error())
 		s.backoffStrategy.RegisterUpdateFailure(err, targetContent.Hash)
@@ -65,7 +66,7 @@ func (s UpdateStrategyWithBackoff) Update(ctx context.Context, targetContent Con
 		s.backoffStrategy.RegisterUpdateSuccess()
 	}
 
-	return err, resourceErrors, rawErrBody, resourceErrorsParseErr
+	return err, resourceErrors, rawErrBody
 }
 
 func (s UpdateStrategyWithBackoff) MetricsProtocol() metrics.Protocol {

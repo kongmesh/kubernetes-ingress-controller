@@ -89,7 +89,7 @@ func TestUpdateStrategyInMemory_PropagatesResourcesErrors(t *testing.T) {
 	require.NoError(t, json.Unmarshal(expectedRawErrBody, &expectedBody))
 
 	require.Eventually(t, func() bool {
-		err, resourceErrors, rawErrBody, parseErr := sut.Update(ctx, faultyConfig)
+		err, resourceErrors, rawErrBody := sut.Update(ctx, faultyConfig)
 		if err == nil {
 			t.Logf("expected error: %v", err)
 			return false
@@ -102,12 +102,8 @@ func TestUpdateStrategyInMemory_PropagatesResourcesErrors(t *testing.T) {
 			t.Log("expected error response body")
 			return false
 		}
-		if parseErr != nil {
-			t.Logf("expected no parse error: %v", parseErr)
-			return false
-		}
 
-		resourceErr, found := lo.Find(resourceErrors, func(r sendconfig.ResourceError) bool {
+		resourceErr, found := lo.Find(resourceErrors, func(r sendconfig.FlatEntityError) bool {
 			return r.Name == "test-service"
 		})
 		if !found {

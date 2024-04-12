@@ -8,9 +8,10 @@ import (
 	"github.com/dominikbraun/graph"
 	"github.com/dominikbraun/graph/draw"
 	"github.com/kong/go-database-reconciler/pkg/file"
-	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/sendconfig"
 	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/util/sets"
+
+	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/sendconfig"
 )
 
 type Entity struct {
@@ -294,7 +295,6 @@ func BuildKongConfigFromGraph(g KongConfigGraph) (*file.Content, error) {
 	return kongConfig, nil
 }
 
-// TODO: do we have to support full history or just the latest good config?
 func BuildFallbackKongConfig(
 	latestGoodConfig KongConfigGraph,
 	currentConfig KongConfigGraph,
@@ -336,6 +336,7 @@ func BuildFallbackKongConfig(
 	}
 
 	// We need to add all connected components that contain affected entities from the latest good config.
+	// This should be an opt-in operation, we may as well skip it if the user does not want to recover the entities.
 	for _, affectedEntity := range affectedEntities {
 		latestGoodComponent, err := findConnectedComponentContainingEntity(latestGoodConnectedComponents, affectedEntity)
 		if err != nil {

@@ -23,9 +23,8 @@ type UpdateStrategy interface {
 	// Update applies targetConfig to the data-plane.
 	Update(ctx context.Context, targetContent ContentWithHash) (
 		err error,
-		resourceErrors []ResourceError,
+		resourceErrors []FlatEntityError,
 		rawErrorBody []byte,
-		resourceErrorsParseErr error,
 	)
 
 	// MetricsProtocol returns a string describing the update strategy type to be used in metrics.

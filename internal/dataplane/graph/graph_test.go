@@ -8,11 +8,12 @@ import (
 
 	graph2 "github.com/dominikbraun/graph"
 	"github.com/kong/go-database-reconciler/pkg/file"
-	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/graph"
-	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/sendconfig"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/graph"
+	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/sendconfig"
 )
 
 const sampleKongConfig = `

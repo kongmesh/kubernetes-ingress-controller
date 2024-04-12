@@ -250,14 +250,14 @@ type mockUpdateStrategy struct {
 	onUpdate func(content sendconfig.ContentWithHash) error
 }
 
+//nolint:revive
 func (m *mockUpdateStrategy) Update(_ context.Context, content sendconfig.ContentWithHash) (
 	err error,
-	resourceErrors []sendconfig.ResourceError,
+	resourceErrors []sendconfig.FlatEntityError,
 	rawErrBody []byte,
-	resourceErrorsParseErr error,
 ) {
 	err = m.onUpdate(content)
-	return err, nil, nil, nil
+	return err, nil, nil
 }
 
 func (m *mockUpdateStrategy) MetricsProtocol() metrics.Protocol {

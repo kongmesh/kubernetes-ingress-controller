@@ -80,13 +80,12 @@ type FlatError struct {
 
 // parseFlatEntityErrors takes a Kong /config error response body and parses its "fields.flattened_errors" value
 // into errors associated with Kubernetes resources.
-func parseFlatEntityErrors(body []byte, logger logr.Logger) ([]ResourceError, error) {
+func parseFlatEntityErrors(body []byte, logger logr.Logger) ([]FlatEntityError, error) {
 	// Directly return here to avoid the misleading "could not unmarshal config" message appear in logs.
 	if len(body) == 0 {
 		return nil, nil
 	}
 
-	var resourceErrors []ResourceError
 	var configError ConfigError
 
 	err := json.Unmarshal(body, &configError)
@@ -100,7 +99,7 @@ func parseFlatEntityErrors(body []byte, logger logr.Logger) ([]ResourceError, er
 				logger.Error(nil, "Could not fully parse config error", "message", message)
 			}
 		}
-		return resourceErrors, fmt.Errorf("could not unmarshal config error: %w", err)
+		return nil, fmt.Errorf("could not unmarshal config error: %w", err)
 	}
 	if len(configError.Flattened) == 0 {
 		if len(configError.Message) > 0 {
@@ -109,7 +108,12 @@ func parseFlatEntityErrors(body []byte, logger logr.Logger) ([]ResourceError, er
 			logger.Error(nil, "Config error missing per-resource and message", "message", configError.Message)
 		}
 	}
-	for _, ee := range configError.Flattened {
+	return configError.Flattened, nil
+}
+
+func ResourceErrorsFromEntityErrors(entityErrors []FlatEntityError, log logr.Logger) []ResourceError {
+	var resourceErrors []ResourceError
+	for _, ee := range entityErrors {
 		raw := rawResourceError{
 			Name:     ee.Name,
 			ID:       ee.ID,
@@ -118,34 +122,32 @@ func parseFlatEntityErrors(body []byte, logger logr.Logger) ([]ResourceError, er
 		}
 		for _, p := range ee.Errors {
 			if len(p.Message) > 0 && len(p.Messages) > 0 {
-				logger.Error(nil, "Entity has both single and array errors for field",
-					"name", ee.Name, "field", p.Field)
+				log.WithValues(
+					"name", ee.Name,
+					"field", p.Field,
+				).Error(nil, "entity has both single and array errors for field")
 				continue
 			}
 			if len(p.Message) > 0 {
-				switch p.Type {
-				case FlatErrorTypeField:
-					// If the error is associated with a single field, store it in the map under the field name.
-					raw.Problems[p.Field] = p.Message
-				case FlatErrorTypeEntity:
-					// If the error is associated with a whole entity, store it in the map under the entity type and name.
-					raw.Problems[fmt.Sprintf("%s:%s", ee.Type, ee.Name)] = p.Message
-				}
+				raw.Problems[p.Field] = p.Message
 			}
-			for i, message := range p.Messages {
-				if len(message) > 0 {
-					raw.Problems[fmt.Sprintf("%s[%d]", p.Field, i)] = message
+			if len(p.Messages) > 0 {
+				for i, message := range p.Messages {
+					if len(message) > 0 {
+						raw.Problems[fmt.Sprintf("%s[%d]", p.Field, i)] = message
+					}
 				}
 			}
 		}
 		parsed, err := parseRawResourceError(raw)
 		if err != nil {
-			logger.Error(err, "Entity tags missing fields", "name", ee.Name)
+			log.WithValues("name", ee.Name).Error(err, "entity tags missing fields")
 			continue
 		}
 		resourceErrors = append(resourceErrors, parsed)
 	}
-	return resourceErrors, nil
+
+	return resourceErrors
 }
 
 // parseRawResourceError takes a raw resource error and parses its tags into Kubernetes metadata. If critical tags are
