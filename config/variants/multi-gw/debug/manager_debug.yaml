@@ -32,6 +32,7 @@ spec:
         args:
           - --feature-gates=GatewayAlpha=true
           - --anonymous-reports=false
+          - --dump-config
         env:
         - name: CONTROLLER_LOG_LEVEL
           value: debug

@@ -155,10 +155,10 @@ spec:
   rules:
     - matches:
         - path:
-            type: PathPrefix
-            value: /team-b
-#            type: RegularExpression
-#            value: /~/demo/**
+#            type: PathPrefix
+#            value: /team-b
+            type: RegularExpression
+            value: /~/demo/**
       filters:
         - type: ResponseHeaderModifier
           responseHeaderModifier:

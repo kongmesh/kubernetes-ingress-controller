@@ -314,10 +314,6 @@ func BuildFallbackKongConfig(
 	if err != nil {
 		return nil, fmt.Errorf("could not find connected components of the current config")
 	}
-	latestGoodConnectedComponents, err := FindConnectedComponents(latestGoodConfig)
-	if err != nil {
-		return nil, fmt.Errorf("could not find connected components of the latest good config")
-	}
 
 	fallbackConfig, err := currentConfig.Clone()
 	if err != nil {
@@ -337,6 +333,10 @@ func BuildFallbackKongConfig(
 
 	// We need to add all connected components that contain affected entities from the latest good config.
 	// This should be an opt-in operation, we may as well skip it if the user does not want to recover the entities.
+	latestGoodConnectedComponents, err := FindConnectedComponents(latestGoodConfig)
+	if err != nil {
+		return nil, fmt.Errorf("could not find connected components of the latest good config")
+	}
 	for _, affectedEntity := range affectedEntities {
 		latestGoodComponent, err := findConnectedComponentContainingEntity(latestGoodConnectedComponents, affectedEntity)
 		if err != nil {

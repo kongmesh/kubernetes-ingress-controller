@@ -588,7 +588,7 @@ func (c *KongClient) sendToClient(
 		var updateErr sendconfig.UpdateError
 		if errors.As(err, &updateErr) {
 			// Try to build fallback configuration.
-			logger.Info("building fallback configuration from the last valid configuration")
+			logger.Info("building fallback configuration")
 			lastValid := deckgen.ToDeckContent(ctx, logger, params.lastValidKongState, deckGenParams)
 			lastValidConfigGraph, err := graph.BuildKongConfigGraph(lastValid)
 			if err != nil {

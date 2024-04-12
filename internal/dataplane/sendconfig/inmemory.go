@@ -60,7 +60,7 @@ func (s UpdateStrategyInMemory) Update(ctx context.Context, targetState ContentW
 		return fmt.Errorf("constructing kong configuration: %w", err), nil, nil
 	}
 
-	if errBody, reloadErr := s.configService.ReloadDeclarativeRawConfig(ctx, bytes.NewReader(config), true, true); err != nil {
+	if errBody, reloadErr := s.configService.ReloadDeclarativeRawConfig(ctx, bytes.NewReader(config), true, true); reloadErr != nil {
 		entityErrs, err := parseFlatEntityErrors(errBody, s.logger)
 		if err != nil {
 			return fmt.Errorf("failed to parse config error: %w: %w", reloadErr, err), nil, errBody
