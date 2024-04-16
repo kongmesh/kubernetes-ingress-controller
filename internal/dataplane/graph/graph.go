@@ -7,6 +7,7 @@ import (
 
 	"github.com/dominikbraun/graph"
 	"github.com/dominikbraun/graph/draw"
+	"github.com/go-logr/logr"
 	"github.com/kong/go-database-reconciler/pkg/file"
 	"github.com/samber/lo"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -15,9 +16,10 @@ import (
 )
 
 type Entity struct {
-	Name string
-	Type string
-	Raw  any
+	Name                             string
+	Type                             string
+	WasRecoveredFromLatestGoodConfig bool
+	Raw                              any
 }
 
 type EntityHash string
@@ -121,7 +123,7 @@ func coloredVertex(color string) func(*graph.VertexProperties) {
 }
 
 func BuildKongConfigGraph(config *file.Content) (KongConfigGraph, error) {
-	g := graph.New(hashEntity)
+	g := graph.New(hashEntity, graph.Directed(), graph.Acyclic())
 
 	for _, caCert := range config.CACertificates {
 		ecac := Entity{Name: *caCert.ID, Type: "ca-certificate", Raw: caCert.DeepCopy()}
@@ -143,6 +145,16 @@ func BuildKongConfigGraph(config *file.Content) (KongConfigGraph, error) {
 			}
 			if err := g.AddEdge(hashEntity(es), hashEntity(er)); err != nil && !errors.Is(err, graph.ErrEdgeAlreadyExists) {
 				return nil, err
+			}
+
+			for _, plugin := range route.Plugins {
+				ep := pluginToEntity(plugin)
+				if err := g.AddVertex(ep, coloredVertex(PluginColor)); err != nil && !errors.Is(err, graph.ErrVertexAlreadyExists) {
+					return nil, err
+				}
+				if err := g.AddEdge(hashEntity(er), hashEntity(ep)); err != nil && !errors.Is(err, graph.ErrEdgeAlreadyExists) {
+					return nil, err
+				}
 			}
 		}
 
@@ -210,24 +222,7 @@ func BuildKongConfigGraph(config *file.Content) (KongConfigGraph, error) {
 
 		// TODO: should we resolve edges for plugins that refer other entities (e.g. mtls-auth -> ca_certificate)?
 
-		// TODO: how to identify Plugins uniquely when no ID nor instance name is present? If we use Plugin.Name,
-		// we will have just one vertex per plugin type, which could result in unwanted connections
-		// (e.g. broken Service1 <-> Plugin <-> Service2 where Service1 and Service2 should not be connected).
-
-		// if plugin.InstanceName == nil {
-		// 	rel := util.Rel{}
-		// 	if plugin.Service != nil {
-		// 		rel.Service = *plugin.Service.ID
-		// 	}
-		// 	if plugin.Route != nil {
-		// 		rel.Route = *plugin.Route.ID
-		// 	}
-		// 	if plugin.Consumer != nil {
-		// 		rel.Consumer = *plugin.Consumer.Username
-		// 	}
-		// 	plugin.InstanceName = lo.ToPtr(kongstate.PluginInstanceName(*plugin.Name, sets.New[string](), rel))
-		// }
-		ep := Entity{Name: *plugin.Name, Type: "plugin", Raw: plugin.DeepCopy()}
+		ep := pluginToEntity(&plugin)
 		if err := g.AddVertex(ep, coloredVertex(PluginColor)); err != nil && !errors.Is(err, graph.ErrVertexAlreadyExists) {
 			return nil, err
 		}
@@ -255,6 +250,16 @@ func BuildKongConfigGraph(config *file.Content) (KongConfigGraph, error) {
 	return g, nil
 }
 
+func pluginToEntity(plugin *file.FPlugin) Entity {
+	// TODO: how to identify Plugins uniquely when no ID nor instance name is present? If we use Plugin.Name,
+	// we will have just one vertex per plugin type, which could result in unwanted connections
+	// (e.g. broken Service1 <-> Plugin <-> Service2 where Service1 and Service2 should not be connected).
+	if plugin.InstanceName == nil {
+		plugin.InstanceName = plugin.Name
+	}
+	return Entity{Name: *plugin.Name + "/" + *plugin.InstanceName, Type: "plugin", Raw: plugin.DeepCopy()}
+}
+
 func BuildKongConfigFromGraph(g KongConfigGraph) (*file.Content, error) {
 	adjacencyMap, err := g.AdjacencyMap()
 	if err != nil {
@@ -270,9 +275,18 @@ func BuildKongConfigFromGraph(g KongConfigGraph) (*file.Content, error) {
 		switch v.Type {
 		case "service":
 			service := v.Raw.(*file.FService)
+			if service.Routes != nil {
+				service.Routes = nil
+			}
+			if v.WasRecoveredFromLatestGoodConfig {
+				service.Tags = append(service.Tags, lo.ToPtr("recovered-from-last-valid-config"))
+			}
 			kongConfig.Services = append(kongConfig.Services, *service)
 		case "route":
 			route := v.Raw.(*file.FRoute)
+			if v.WasRecoveredFromLatestGoodConfig {
+				route.Tags = append(route.Tags, lo.ToPtr("recovered-from-last-valid-config"))
+			}
 			kongConfig.Routes = append(kongConfig.Routes, *route)
 		case "certificate":
 			certificate := v.Raw.(*file.FCertificate)
@@ -285,6 +299,9 @@ func BuildKongConfigFromGraph(g KongConfigGraph) (*file.Content, error) {
 			kongConfig.Consumers = append(kongConfig.Consumers, *consumer)
 		case "plugin":
 			plugin := v.Raw.(*file.FPlugin)
+			if v.WasRecoveredFromLatestGoodConfig {
+				plugin.Tags = append(plugin.Tags, lo.ToPtr("recovered-from-last-valid-config"))
+			}
 			kongConfig.Plugins = append(kongConfig.Plugins, *plugin)
 		case "upstream":
 			upstream := v.Raw.(*file.FUpstream)
@@ -299,6 +316,7 @@ func BuildFallbackKongConfig(
 	latestGoodConfig KongConfigGraph,
 	currentConfig KongConfigGraph,
 	entityErrors []sendconfig.FlatEntityError,
+	logger logr.Logger,
 ) (KongConfigGraph, error) {
 	if len(entityErrors) == 0 {
 		return nil, errors.New("entityErrors is empty")
@@ -310,45 +328,111 @@ func BuildFallbackKongConfig(
 		return hashEntity(Entity{Name: ee.Name, Type: ee.Type})
 	})
 
-	currentConnectedComponents, err := FindConnectedComponents(currentConfig)
-	if err != nil {
-		return nil, fmt.Errorf("could not find connected components of the current config")
-	}
-
 	fallbackConfig, err := currentConfig.Clone()
 	if err != nil {
 		return nil, fmt.Errorf("could not clone current config")
 	}
-	// We need to remove all connected components that contain affected entities.
-	for _, affectedEntity := range affectedEntities {
-		connectedComponent, err := findConnectedComponentContainingEntity(currentConnectedComponents, affectedEntity)
-		if err != nil {
-			return nil, fmt.Errorf("could not find connected component containing entity %s", affectedEntity)
-		}
-
-		if err := removeConnectedComponentFromGraph(fallbackConfig, connectedComponent); err != nil {
-			return nil, fmt.Errorf("could not remove connected component from graph")
+	for _, entity := range affectedEntities {
+		if err := removeSubraphFromVertex(fallbackConfig, entity); err != nil {
+			return nil, fmt.Errorf("could not remove subgraph containing entity %s: %w", entity, err)
 		}
 	}
-
 	// We need to add all connected components that contain affected entities from the latest good config.
 	// This should be an opt-in operation, we may as well skip it if the user does not want to recover the entities.
-	latestGoodConnectedComponents, err := FindConnectedComponents(latestGoodConfig)
-	if err != nil {
-		return nil, fmt.Errorf("could not find connected components of the latest good config")
-	}
-	for _, affectedEntity := range affectedEntities {
-		latestGoodComponent, err := findConnectedComponentContainingEntity(latestGoodConnectedComponents, affectedEntity)
-		if err != nil {
-			// TODO: If there's no connected component in the latest good config for the broken entity, we can skip it, right?
-			continue
-		}
-		if err := addConnectedComponentToGraph(fallbackConfig, latestGoodComponent); err != nil {
-			return nil, fmt.Errorf("could not add connected component to graph: %w", err)
+	for _, entity := range affectedEntities {
+		if err := addSubgraphFromVertex(latestGoodConfig, fallbackConfig, entity); err != nil {
+			return nil, fmt.Errorf("could not add subgraph containing entity %s: %w", entity, err)
 		}
 	}
 
 	return fallbackConfig, nil
+}
+
+func removeSubraphFromVertex(g KongConfigGraph, v EntityHash) error {
+	adjacencyMap, err := g.AdjacencyMap()
+	if err != nil {
+		return fmt.Errorf("could not get adjacency map of graph")
+	}
+
+	if _, err := g.Vertex(v); err != nil {
+		return fmt.Errorf("could not get vertex %v", v)
+	}
+
+	// Run DFS to find all dependent entities and remove them from the graph.
+	if err := graph.DFS(g, v, func(visited EntityHash) bool {
+		// Remove edges first.
+		for neighbour := range adjacencyMap[visited] {
+			if err := g.RemoveEdge(visited, neighbour); err != nil {
+				return false
+			}
+		}
+		predecesorsMap, err := g.PredecessorMap()
+		if err != nil {
+			return false
+		}
+		for neighbour := range predecesorsMap[visited] {
+			if err := g.RemoveEdge(neighbour, visited); err != nil {
+				return false
+			}
+		}
+
+		if err := g.RemoveVertex(visited); err != nil {
+			return false
+		}
+		return false // Run DFS until all dependent entities are removed.
+	}); err != nil {
+		return fmt.Errorf("could not remove connected component containing entity %s: %w", v, err)
+	}
+
+	return nil
+}
+
+func addSubgraphFromVertex(src KongConfigGraph, dst KongConfigGraph, v EntityHash) error {
+	adjacencyMap, err := src.AdjacencyMap()
+	if err != nil {
+		return fmt.Errorf("could not get adjacency map of graph")
+	}
+
+	if _, err := src.Vertex(v); err != nil {
+		return fmt.Errorf("could not get vertex %v", v)
+	}
+
+	// Run DFS to find all dependent entities and add them to the destination graph.
+	if err := graph.DFS(src, v, func(visited EntityHash) bool {
+		vertex, props, err := src.VertexWithProperties(visited)
+		if err != nil {
+			return false
+		}
+		vertex.WasRecoveredFromLatestGoodConfig = true
+		if err := dst.AddVertex(vertex, graph.VertexAttributes(props.Attributes)); err != nil {
+			return false
+		}
+
+		// Add edges.
+		for neighbour := range adjacencyMap[visited] {
+			if err := dst.AddEdge(visited, neighbour); err != nil {
+				return false
+			}
+		}
+
+		return false // Run DFS until all dependent entities are added.
+	}); err != nil {
+		return fmt.Errorf("could not add connected component containing entity %s: %w", v, err)
+	}
+
+	predecesorsMap, err := src.PredecessorMap()
+	if err != nil {
+		return fmt.Errorf("could not get predecessor map of graph")
+	}
+	predecesors := predecesorsMap[v]
+	for predecesor := range predecesors {
+		if err := dst.AddEdge(predecesor, v); err != nil {
+			return fmt.Errorf("could not add edge from %s to %s: %w", predecesor, v, err)
+		}
+
+	}
+
+	return nil
 }
 
 func addConnectedComponentToGraph(g KongConfigGraph, component KongConfigGraph) error {

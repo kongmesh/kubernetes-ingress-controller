@@ -22,6 +22,7 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/adminapi"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/clients"
@@ -470,6 +471,7 @@ func (c *KongClient) sendOutToGatewayClients(ctx context.Context, params sendToG
 		return c.sendToClient(ctx, *client, params)
 	})
 	if err != nil {
+		c.logger.Error(err, "Failed to send configuration to gateway clients")
 		return nil, err
 	}
 
@@ -488,7 +490,8 @@ func (c *KongClient) sendOutToGatewayClients(ctx context.Context, params sendToG
 	sort.Strings(shas)
 	c.SHAs = shas
 
-	c.kongConfigFetcher.StoreLastValidConfig(params.currentKongState)
+	// TODO: we need to store last valid config only when the configuration was not fallback.
+	// c.kongConfigFetcher.StoreLastValidConfig(params.currentKongState)
 
 	return previousSHAs, nil
 }
@@ -589,18 +592,36 @@ func (c *KongClient) sendToClient(
 		if errors.As(err, &updateErr) {
 			// Try to build fallback configuration.
 			logger.Info("building fallback configuration")
-			lastValid := deckgen.ToDeckContent(ctx, logger, params.lastValidKongState, deckGenParams)
-			lastValidConfigGraph, err := graph.BuildKongConfigGraph(lastValid)
-			if err != nil {
-				return "", fmt.Errorf("failed to build last valid configuration graph: %w", err)
+
+			var lastValidConfigGraph graph.KongConfigGraph
+			if params.lastValidKongState != nil {
+				lastValid := deckgen.ToDeckContent(ctx, logger, params.lastValidKongState, deckGenParams)
+				lastValidB, err := yaml.Marshal(lastValid)
+				if err != nil {
+					return "", fmt.Errorf("failed to marshal target last valid content: %w", err)
+				}
+				fmt.Println("last valid content")
+				fmt.Println(string(lastValidB))
+				lastValidConfigGraph, err = graph.BuildKongConfigGraph(lastValid)
+				if err != nil {
+					return "", fmt.Errorf("failed to build last valid configuration graph: %w", err)
+				}
 			}
+
+			targetContentB, err := yaml.Marshal(targetContent)
+			if err != nil {
+				return "", fmt.Errorf("failed to marshal target content: %w", err)
+			}
+			fmt.Println("target content")
+			fmt.Println(string(targetContentB))
+
 			targetConfigGraph, err := graph.BuildKongConfigGraph(targetContent)
 			if err != nil {
 				return "", fmt.Errorf("failed to build target configuration graph: %w", err)
 			}
 
 			// Build the fallback configuration from the last valid state.
-			fallbackConfigGraph, err := graph.BuildFallbackKongConfig(lastValidConfigGraph, targetConfigGraph, updateErr.EntityErrors)
+			fallbackConfigGraph, err := graph.BuildFallbackKongConfig(lastValidConfigGraph, targetConfigGraph, updateErr.EntityErrors, logr.Discard())
 			if err != nil {
 				return "", fmt.Errorf("failed to build fallback configuration: %w", err)
 			}
@@ -627,16 +648,9 @@ func (c *KongClient) sendToClient(
 				c.configChangeDetector,
 			)
 			if err != nil {
-				resourceErrors := sendconfig.ResourceErrorsFromEntityErrors(updateErr.EntityErrors, logger)
-				resourceFailures := sendconfig.ResourceErrorsToResourceFailures(resourceErrors, logger)
-				c.recordResourceFailureEvents(resourceFailures, KongConfigurationApplyFailedEventReason)
-				sendDiagnostic(updateErr.Err != nil, updateErr.RawBody)
-
-				if updateErr.Err != nil {
-					if err := ctx.Err(); err != nil {
-						logger.Error(err, "Exceeded Kong API timeout, consider increasing --proxy-timeout-seconds")
-					}
-					return "", fmt.Errorf("performing update for %s failed: %w", client.BaseRootURL(), updateErr)
+				var updateErr sendconfig.UpdateError
+				if errors.As(err, &updateErr) {
+					logger.Error(err, "failed to apply fallback configuration to Kong", "body", updateErr.RawBody)
 				}
 				return "", fmt.Errorf("failed to apply fallback configuration to Kong: %w", err)
 			}
@@ -649,9 +663,13 @@ func (c *KongClient) sendToClient(
 		// It should never happen.
 		return "", fmt.Errorf("performing update for %s failed with unexpected type of error: %w", client.BaseRootURL(), err)
 	}
+
 	sendDiagnostic(false, nil) // No error occurred.
 	// update the lastConfigSHA with the new updated checksum
 	client.SetLastConfigSHA(newConfigSHA)
+
+	// TODO: remove and move up in the callstack? keep last valid config per client?
+	c.kongConfigFetcher.StoreLastValidConfig(params.currentKongState)
 
 	return string(newConfigSHA), nil
 }

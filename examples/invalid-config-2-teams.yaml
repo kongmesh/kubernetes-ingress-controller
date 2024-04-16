@@ -155,10 +155,11 @@ spec:
   rules:
     - matches:
         - path:
-#            type: PathPrefix
-#            value: /team-b
-            type: RegularExpression
-            value: /~/demo/**
+            type: PathPrefix
+            value: /team-b
+# Uncomment the following block to generate an invalid configuration (given no admission webhook is present)
+#            type: RegularExpression
+#            value: /~/demo/**
       filters:
         - type: ResponseHeaderModifier
           responseHeaderModifier:

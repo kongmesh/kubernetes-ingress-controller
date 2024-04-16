@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	graph2 "github.com/dominikbraun/graph"
+	"github.com/go-logr/logr"
 	"github.com/kong/go-database-reconciler/pkg/file"
+	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/sendconfig"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/graph"
-	"github.com/kong/kubernetes-ingress-controller/v3/internal/dataplane/sendconfig"
 )
 
 const sampleKongConfig = `
@@ -349,7 +350,333 @@ func adjacencyMapString(am map[graph.EntityHash]map[graph.EntityHash]graph2.Edge
 }
 
 func TestBuildingFallbackConfig(t *testing.T) {
-	lastKnownGoodConfig := `_format_version: "3.0"
+	testCases := []struct {
+		name                string
+		lastKnownGoodConfig string
+		targetConfig        string
+		entitiesErrors      []sendconfig.FlatEntityError
+	}{
+		{
+			name: "route with an invalid regex path",
+			lastKnownGoodConfig: `_format_version: "3.0"
+_info:
+  defaults: {}
+  select_tags:
+  - managed-by-ingress-controller
+services:
+- connect_timeout: 60000
+  host: httproute.team-b.httproute-testing.0
+  id: 0552dbbf-0b55-5ac1-98c7-cbb689ab6c7b
+  name: httproute.team-b.httproute-testing.0
+  port: 80
+  protocol: http
+  read_timeout: 60000
+  retries: 5
+  routes:
+  - https_redirect_status_code: 426
+    id: 5ff9fb00-8287-52b4-a280-d248faca521f
+    name: httproute.team-b.httproute-testing.0.0
+    path_handling: v0
+    paths:
+    - ~/team-b$
+    - /team-b/
+    plugins:
+    - config:
+        add:
+          headers: []
+          json: []
+          json_types: []
+        append:
+          headers:
+          - X-Team:b
+          json: []
+          json_types: []
+        remove:
+          headers: []
+          json: []
+        rename:
+          headers: []
+        replace:
+          headers: []
+          json: []
+          json_types: []
+      enabled: true
+      name: response-transformer
+      instance_name: team-b
+      protocols:
+      - grpc
+      - grpcs
+      - http
+      - https
+    preserve_host: true
+    protocols:
+    - http
+    - https
+    strip_path: true
+    tags:
+    - k8s-name:httproute-testing
+    - k8s-namespace:team-b
+    - k8s-kind:HTTPRoute
+    - k8s-uid:cb62ee58-4e19-4477-8e63-65e5976b5da8
+    - k8s-group:gateway.networking.k8s.io
+    - k8s-version:v1
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-b
+  - k8s-kind:Service
+  - k8s-uid:cdb30451-ceaf-4464-b7af-04a6f64eb772
+  - k8s-version:v1
+  write_timeout: 60000
+- connect_timeout: 60000
+  host: httproute.team-a.httproute-testing.0
+  id: ead6be11-9830-5f37-b1d3-9e7b2aaccee4
+  name: httproute.team-a.httproute-testing.0
+  port: 80
+  protocol: http
+  read_timeout: 60000
+  retries: 5
+  routes:
+  - https_redirect_status_code: 426
+    id: 5f9c733d-7d5f-5fce-8ea1-974aa95df845
+    name: httproute.team-a.httproute-testing.0.0
+    path_handling: v0
+    paths:
+    - ~/team-a$
+    - /team-a/
+    plugins:
+    - config:
+        add:
+          headers: []
+          json: []
+          json_types: []
+        append:
+          headers:
+          - X-Team:a
+          json: []
+          json_types: []
+        remove:
+          headers: []
+          json: []
+        rename:
+          headers: []
+        replace:
+          headers: []
+          json: []
+          json_types: []
+      enabled: true
+      name: response-transformer
+      instance_name: team-a
+      protocols:
+      - grpc
+      - grpcs
+      - http
+      - https
+    preserve_host: true
+    protocols:
+    - http
+    - https
+    strip_path: true
+    tags:
+    - k8s-name:httproute-testing
+    - k8s-namespace:team-a
+    - k8s-kind:HTTPRoute
+    - k8s-uid:f911ebe9-49a3-41df-9315-5f65718df247
+    - k8s-group:gateway.networking.k8s.io
+    - k8s-version:v1
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-a
+  - k8s-kind:Service
+  - k8s-uid:b81f7590-3287-4c8d-b4e8-220f864e4c38
+  - k8s-version:v1
+  write_timeout: 60000
+upstreams:
+- algorithm: round-robin
+  name: httproute.team-b.httproute-testing.0
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-b
+  - k8s-kind:Service
+  - k8s-uid:cdb30451-ceaf-4464-b7af-04a6f64eb772
+  - k8s-version:v1
+  targets:
+  - target: 192.168.194.9:80
+    weight: 1
+- algorithm: round-robin
+  name: httproute.team-a.httproute-testing.0
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-a
+  - k8s-kind:Service
+  - k8s-uid:b81f7590-3287-4c8d-b4e8-220f864e4c38
+  - k8s-version:v1
+  targets:
+  - target: 192.168.194.8:80
+    weight: 1`,
+			targetConfig: `_format_version: "3.0"
+_info:
+  defaults: {}
+  select_tags:
+  - managed-by-ingress-controller
+services:
+- connect_timeout: 60000
+  host: httproute.team-b.httproute-testing.0
+  id: 0552dbbf-0b55-5ac1-98c7-cbb689ab6c7b
+  name: httproute.team-b.httproute-testing.0
+  port: 80
+  protocol: http
+  read_timeout: 60000
+  retries: 5
+  routes:
+  - https_redirect_status_code: 426
+    id: 5ff9fb00-8287-52b4-a280-d248faca521f
+    name: httproute.team-b.httproute-testing.0.0
+    path_handling: v0
+    paths:
+    - ~/~/demo/**
+    plugins:
+    - config:
+        add:
+          headers: []
+          json: []
+          json_types: []
+        append:
+          headers:
+          - X-Team:b
+          json: []
+          json_types: []
+        remove:
+          headers: []
+          json: []
+        rename:
+          headers: []
+        replace:
+          headers: []
+          json: []
+          json_types: []
+      enabled: true
+      name: response-transformer
+      instance_name: team-b
+      protocols:
+      - grpc
+      - grpcs
+      - http
+      - https
+    preserve_host: true
+    protocols:
+    - http
+    - https
+    strip_path: true
+    tags:
+    - k8s-name:httproute-testing
+    - k8s-namespace:team-b
+    - k8s-kind:HTTPRoute
+    - k8s-uid:cb62ee58-4e19-4477-8e63-65e5976b5da8
+    - k8s-group:gateway.networking.k8s.io
+    - k8s-version:v1
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-b
+  - k8s-kind:Service
+  - k8s-uid:cdb30451-ceaf-4464-b7af-04a6f64eb772
+  - k8s-version:v1
+  write_timeout: 60000
+- connect_timeout: 60000
+  host: httproute.team-a.httproute-testing.0
+  id: ead6be11-9830-5f37-b1d3-9e7b2aaccee4
+  name: httproute.team-a.httproute-testing.0
+  port: 80
+  protocol: http
+  read_timeout: 60000
+  retries: 5
+  routes:
+  - https_redirect_status_code: 426
+    id: 5f9c733d-7d5f-5fce-8ea1-974aa95df845
+    name: httproute.team-a.httproute-testing.0.0
+    path_handling: v0
+    paths:
+    - ~/team-a$
+    - /team-a/
+    plugins:
+    - config:
+        add:
+          headers: []
+          json: []
+          json_types: []
+        append:
+          headers:
+          - X-Team:a
+          json: []
+          json_types: []
+        remove:
+          headers: []
+          json: []
+        rename:
+          headers: []
+        replace:
+          headers: []
+          json: []
+          json_types: []
+      enabled: true
+      name: response-transformer
+      instance_name: team-a
+      protocols:
+      - grpc
+      - grpcs
+      - http
+      - https
+    preserve_host: true
+    protocols:
+    - http
+    - https
+    strip_path: true
+    tags:
+    - k8s-name:httproute-testing
+    - k8s-namespace:team-a
+    - k8s-kind:HTTPRoute
+    - k8s-uid:f911ebe9-49a3-41df-9315-5f65718df247
+    - k8s-group:gateway.networking.k8s.io
+    - k8s-version:v1
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-a
+  - k8s-kind:Service
+  - k8s-uid:b81f7590-3287-4c8d-b4e8-220f864e4c38
+  - k8s-version:v1
+  write_timeout: 60000
+upstreams:
+- algorithm: round-robin
+  name: httproute.team-b.httproute-testing.0
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-b
+  - k8s-kind:Service
+  - k8s-uid:cdb30451-ceaf-4464-b7af-04a6f64eb772
+  - k8s-version:v1
+  targets:
+  - target: 192.168.194.9:80
+    weight: 1
+- algorithm: round-robin
+  name: httproute.team-a.httproute-testing.0
+  tags:
+  - k8s-name:httpbin
+  - k8s-namespace:team-a
+  - k8s-kind:Service
+  - k8s-uid:b81f7590-3287-4c8d-b4e8-220f864e4c38
+  - k8s-version:v1
+  targets:
+  - target: 192.168.194.8:80
+    weight: 1`,
+			entitiesErrors: []sendconfig.FlatEntityError{
+				{
+					Type: "route",
+					Name: "httproute.team-b.httproute-testing.0.0",
+				},
+			},
+		},
+		{
+			name: "invalid route with a plugin defined in top-level plugins field",
+			lastKnownGoodConfig: `_format_version: "3.0"
 ca_certificates:
 - cert: |
     -----BEGIN CERTIFICATE-----
@@ -505,11 +832,8 @@ upstreams:
   tags:
   - k8s-name:httpbin-other
   - k8s-kind:Service
-  - k8s-version:v1`
-	lastKnownGoodConfigGraph := mustGraphFromRawYAML(t, lastKnownGoodConfig)
-
-	// This is the current Kong config parser has generated.
-	currentConfig := `_format_version: "3.0"
+  - k8s-version:v1`,
+			targetConfig: `_format_version: "3.0"
 plugins:
 - config:
     header_name: kong-id-2
@@ -623,30 +947,34 @@ upstreams:
   tags:
   - k8s-name:httpbin-other
   - k8s-kind:Service
-  - k8s-version:v1`
-	currentConfigGraph := mustGraphFromRawYAML(t, currentConfig)
-
-	entitiesErrors := []sendconfig.FlatEntityError{
-		{
-			Type: "route",
-			Name: ".httpbin-other.httpbin-other..80",
+  - k8s-version:v1`,
 		},
 	}
 
-	fallbackConfig, err := graph.BuildFallbackKongConfig(lastKnownGoodConfigGraph, currentConfigGraph, entitiesErrors)
-	require.NoError(t, err)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			lastKnownGoodConfigGraph := mustGraphFromRawYAML(t, tc.lastKnownGoodConfig)
 
-	lastGoodSvg := dumpGraphAsDOT(t, lastKnownGoodConfigGraph)
-	currentSvg := dumpGraphAsDOT(t, currentConfigGraph)
-	fallbackSvg := dumpGraphAsDOT(t, fallbackConfig)
-	t.Logf("open %s %s %s", lastGoodSvg, currentSvg, fallbackSvg)
+			// This is the current Kong config parser has generated.
+			currentConfigGraph := mustGraphFromRawYAML(t, tc.targetConfig)
 
-	fallbackKongConfig, err := graph.BuildKongConfigFromGraph(fallbackConfig)
-	require.NoError(t, err)
+			fallbackConfig, err := graph.BuildFallbackKongConfig(lastKnownGoodConfigGraph, currentConfigGraph, tc.entitiesErrors, logr.Discard())
+			require.NoError(t, err)
 
-	b, err := yaml.Marshal(fallbackKongConfig)
-	require.NoError(t, err)
-	t.Logf("fallback config:\n%s", string(b))
+			lastGoodSvg := dumpGraphAsDOT(t, lastKnownGoodConfigGraph)
+			currentSvg := dumpGraphAsDOT(t, currentConfigGraph)
+			fallbackSvg := dumpGraphAsDOT(t, fallbackConfig)
+			t.Logf("open %s %s %s", lastGoodSvg, currentSvg, fallbackSvg)
+
+			fallbackKongConfig, err := graph.BuildKongConfigFromGraph(fallbackConfig)
+			require.NoError(t, err)
+
+			b, err := yaml.Marshal(fallbackKongConfig)
+			require.NoError(t, err)
+			t.Logf("fallback config:\n%s", string(b))
+		})
+	}
+
 }
 
 func mustGraphFromRawYAML(t *testing.T, y string) graph.KongConfigGraph {
