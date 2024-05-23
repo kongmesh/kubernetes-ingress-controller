@@ -184,6 +184,12 @@ func WithAdmissionWebhookEnabled(key, cert []byte, addr string) func(cfg *manage
 	}
 }
 
+func WithFallbackConfigurationFeatureEnabled() func(cfg *manager.Config) {
+	return func(cfg *manager.Config) {
+		cfg.FeatureGates[featuregates.FallbackConfiguration] = true
+	}
+}
+
 // AdminAPIOptFns wraps a variadic list of mocks.AdminAPIHandlerOpt and returns
 // a slice containing all of them.
 // The purpose of this is func is to make the call sites a bit less verbose.

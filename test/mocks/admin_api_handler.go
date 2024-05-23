@@ -7,7 +7,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/goccy/go-json"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/versions"
+	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 )
 
 const mockConsumerError = `{
@@ -53,6 +56,13 @@ type AdminAPIHandler struct {
 	// responding to a `POST /config` request.
 	configPostErrorBody []byte
 
+	// configPostErrorOnlyOnFirstRequest determines whether the error response to `POST /config` should be returned only
+	// on a first request.
+	configPostErrorOnlyOnFirstRequest bool
+
+	// firstPostRequestReceived indicates whether a first `POST /config` request has been received.
+	firstPostRequestReceived bool
+
 	// rootResponse is the response body served by the admin API root "GET /" endpoint.
 	rootResponse []byte
 }
@@ -91,6 +101,12 @@ func WithVersion(version string) AdminAPIHandlerOpt {
 func WithConfigPostError(errorbody []byte) AdminAPIHandlerOpt {
 	return func(h *AdminAPIHandler) {
 		h.configPostErrorBody = errorbody
+	}
+}
+
+func WithConfigPostErrorOnlyOnFirstRequest() AdminAPIHandlerOpt {
+	return func(h *AdminAPIHandler) {
+		h.configPostErrorOnlyOnFirstRequest = true
 	}
 }
 
@@ -171,21 +187,24 @@ func NewAdminAPIHandler(t *testing.T, opts ...AdminAPIHandlerOpt) *AdminAPIHandl
 		switch r.Method {
 		case http.MethodGet:
 			if h.config != nil {
-				_, _ = w.Write(h.config)
+				_, _ = w.Write(h.configResponseBody(t))
 			} else {
 				_, _ = w.Write([]byte(fmt.Sprintf(`{"version": "%s"}`, h.version)))
 			}
 
 		case http.MethodPost:
-			if h.configPostErrorBody != nil {
+			b, _ := io.ReadAll(r.Body)
+			h.config = b
+			h.t.Logf("got config: %v", string(b))
+
+			if h.configPostErrorBody != nil && !(h.configPostErrorOnlyOnFirstRequest && h.firstPostRequestReceived) {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write(h.configPostErrorBody)
 			} else {
 				w.WriteHeader(http.StatusNoContent)
-				b, _ := io.ReadAll(r.Body)
-				h.t.Logf("got config: %v", string(b))
-				h.config = b
 			}
+
+			h.firstPostRequestReceived = true
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
 		}
@@ -251,6 +270,30 @@ func (m *AdminAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (m *AdminAPIHandler) WasWorkspaceCreated() bool {
 	return m.workspaceWasCreated.Load()
+}
+
+func (m *AdminAPIHandler) LastReceivedConfig() []byte {
+	return m.config
+}
+
+// configResponseBody returns the response body for the `GET /config` endpoint.
+// Kong returns the YAML config wrapped in a JSON object and that's what go-kong client expects.
+func (m *AdminAPIHandler) configResponseBody(t *testing.T) []byte {
+	// Unmarshal JSON to map[string]any, then marshal back to YAML.
+	cfg := map[string]any{}
+	err := yaml.Unmarshal(m.config, &cfg)
+	require.NoError(t, err)
+	yamlCfg, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+
+	// Embed the YAML config in a JSON response.
+	responseBody, err := json.Marshal(struct {
+		Config string `json:"config"`
+	}{
+		Config: string(yamlCfg),
+	})
+	require.NoError(t, err)
+	return responseBody
 }
 
 func formatDefaultDBLessRootResponse(version string) []byte {
