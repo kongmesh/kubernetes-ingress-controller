@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/kong/kubernetes-ingress-controller/v3/internal/diagnostics"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/store"
 	"github.com/kong/kubernetes-ingress-controller/v3/internal/util"
 )
@@ -31,65 +32,76 @@ func NewGenerator(cacheGraphProvider CacheGraphProvider, logger logr.Logger) *Ge
 func (g *Generator) GenerateExcludingBrokenObjects(
 	cache store.CacheStores,
 	brokenObjects []ObjectHash,
-) (store.CacheStores, error) {
+) (store.CacheStores, []diagnostics.FallbackDiagnostic, error) {
 	graph, err := g.cacheGraphProvider.CacheToGraph(cache)
 	if err != nil {
-		return store.CacheStores{}, fmt.Errorf("failed to build cache graph: %w", err)
+		return store.CacheStores{}, nil, fmt.Errorf("failed to build cache graph: %w", err)
 	}
 
 	fallbackCache, err := cache.TakeSnapshot()
 	if err != nil {
-		return store.CacheStores{}, fmt.Errorf("failed to take cache snapshot: %w", err)
+		return store.CacheStores{}, nil, fmt.Errorf("failed to take cache snapshot: %w", err)
 	}
 
+	var diag []diagnostics.FallbackDiagnostic
 	for _, brokenObject := range brokenObjects {
 		subgraphObjects, err := graph.SubgraphObjects(brokenObject)
 		if err != nil {
-			return store.CacheStores{}, fmt.Errorf("failed to find dependants for %s: %w", brokenObject, err)
+			return store.CacheStores{}, nil, fmt.Errorf("failed to find dependants for %s: %w", brokenObject, err)
 		}
 		for _, obj := range subgraphObjects {
 			if err := fallbackCache.Delete(obj); err != nil {
-				return store.CacheStores{}, fmt.Errorf("failed to delete %s from the cache: %w", GetObjectHash(obj), err)
+				return store.CacheStores{}, nil, fmt.Errorf("failed to delete %s from the cache: %w", GetObjectHash(obj), err)
 			}
 			g.logger.V(util.DebugLevel).Info("Excluded object from fallback cache",
 				"object_kind", obj.GetObjectKind(),
 				"object_name", obj.GetName(),
 				"object_namespace", obj.GetNamespace(),
 			)
+			diag = append(diag, diagnostics.FallbackDiagnostic{
+				GroupKind: obj.GetObjectKind().GroupVersionKind().GroupKind().String(),
+				Namespace: obj.GetNamespace(),
+				Name:      obj.GetName(),
+				ID:        string(obj.GetUID()),
+				Status:    "excluded",
+			})
 		}
 	}
 
-	return fallbackCache, nil
+	return fallbackCache, diag, nil
 }
 
 func (g *Generator) GenerateBackfillingBrokenObjects(
 	currentCache store.CacheStores,
 	lastValidCacheSnapshot store.CacheStores,
 	brokenObjects []ObjectHash,
-) (store.CacheStores, error) {
+) (store.CacheStores, []diagnostics.FallbackDiagnostic, error) {
 	// Build a graph from the current cache.
 	currentGraph, err := g.cacheGraphProvider.CacheToGraph(currentCache)
 	if err != nil {
-		return store.CacheStores{}, fmt.Errorf("failed to build current cache graph: %w", err)
+		return store.CacheStores{}, nil, fmt.Errorf("failed to build current cache graph: %w", err)
 	}
 
 	// Take a snapshot of the current cache to use as a fallback.
 	fallbackCache, err := currentCache.TakeSnapshot()
 	if err != nil {
-		return store.CacheStores{}, fmt.Errorf("failed to take current cache snapshot: %w", err)
+		return store.CacheStores{}, nil, fmt.Errorf("failed to take current cache snapshot: %w", err)
 	}
 
 	// Exclude the affected objects from the fallback cache. Also, collect all the affected objects as they will be
 	// subjects of backfilling.
-	var affectedObjects []ObjectHash
+	var (
+		affectedObjects []ObjectHash
+		diag            []diagnostics.FallbackDiagnostic
+	)
 	for _, brokenObject := range brokenObjects {
 		subgraphObjects, err := currentGraph.SubgraphObjects(brokenObject)
 		if err != nil {
-			return store.CacheStores{}, fmt.Errorf("failed to find dependants for %s: %w", brokenObject, err)
+			return store.CacheStores{}, nil, fmt.Errorf("failed to find dependants for %s: %w", brokenObject, err)
 		}
 		for _, obj := range subgraphObjects {
 			if err := fallbackCache.Delete(obj); err != nil {
-				return store.CacheStores{}, fmt.Errorf("failed to delete %s from the fallback cache: %w", GetObjectHash(obj), err)
+				return store.CacheStores{}, nil, fmt.Errorf("failed to delete %s from the fallback cache: %w", GetObjectHash(obj), err)
 			}
 			g.logger.V(util.DebugLevel).Info("Excluded object from fallback cache",
 				"object_kind", obj.GetObjectKind(),
@@ -97,32 +109,46 @@ func (g *Generator) GenerateBackfillingBrokenObjects(
 				"object_namespace", obj.GetNamespace(),
 			)
 			affectedObjects = append(affectedObjects, GetObjectHash(obj))
+			diag = append(diag, diagnostics.FallbackDiagnostic{
+				GroupKind: obj.GetObjectKind().GroupVersionKind().GroupKind().String(),
+				Namespace: obj.GetNamespace(),
+				Name:      obj.GetName(),
+				ID:        string(obj.GetUID()),
+				Status:    "excluded",
+			})
 		}
 	}
 
 	// Build a graph from the last valid cache snapshot.
 	lastValidGraph, err := g.cacheGraphProvider.CacheToGraph(lastValidCacheSnapshot)
 	if err != nil {
-		return store.CacheStores{}, fmt.Errorf("failed to build cache graph: %w", err)
+		return store.CacheStores{}, diag, fmt.Errorf("failed to build cache graph: %w", err)
 	}
 
 	// Backfill the affected objects from the last valid cache snapshot.
 	for _, affectedObject := range affectedObjects {
 		objectsToBackfill, err := lastValidGraph.SubgraphObjects(affectedObject)
 		if err != nil {
-			return store.CacheStores{}, fmt.Errorf("failed to find dependants for %s: %w", affectedObject, err)
+			return store.CacheStores{}, nil, fmt.Errorf("failed to find dependants for %s: %w", affectedObject, err)
 		}
 
 		for _, obj := range objectsToBackfill {
 			if err := fallbackCache.Add(obj); err != nil {
-				return store.CacheStores{}, fmt.Errorf("failed to add %s to the cache: %w", GetObjectHash(obj), err)
+				return store.CacheStores{}, diag, fmt.Errorf("failed to add %s to the cache: %w", GetObjectHash(obj), err)
 			}
 			g.logger.V(util.DebugLevel).Info("Backfilled object to fallback cache from previous valid cache snapshot",
 				"object_kind", obj.GetObjectKind(),
 				"object_name", obj.GetName(),
 				"object_namespace", obj.GetNamespace(),
 			)
+			diag = append(diag, diagnostics.FallbackDiagnostic{
+				GroupKind: obj.GetObjectKind().GroupVersionKind().GroupKind().String(),
+				Namespace: obj.GetNamespace(),
+				Name:      obj.GetName(),
+				ID:        string(obj.GetUID()),
+				Status:    "backfilled",
+			})
 		}
 	}
-	return fallbackCache, nil
+	return fallbackCache, diag, nil
 }

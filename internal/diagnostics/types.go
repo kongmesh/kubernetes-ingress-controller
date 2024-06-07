@@ -37,13 +37,39 @@ type problemObjectsResponse struct {
 	BrokenObjects []AffectedObject `json:"brokenObjects"`
 }
 
+type fallbackResponse struct {
+	ConfigHash      string               `json:"hash"`
+	FallbackObjects []FallbackDiagnostic `json:"objects"`
+}
+
+// FallbackDiagnosticCollection is a set of fallback object diagnostics associated with a config hash.
+type FallbackDiagnosticCollection struct {
+	ConfigHash string
+	Objects    []FallbackDiagnostic
+}
+
+// FallbackDiagnostic are fallback objects.
+type FallbackDiagnostic struct {
+	// GroupKind is the object group and kind.
+	GroupKind string `json:"resource"`
+	// Namespace is the object namespace.
+	Namespace string `json:"namespace"`
+	// Namespace is the object name.
+	Name string `json:"name"`
+	// ID is the object UID.
+	ID string `json:"id"`
+	// Status is the object's fallback status.
+	Status string `json:"status"`
+}
+
 // ConfigDumpDiagnostic contains settings and channels for receiving diagnostic configuration dumps.
 type ConfigDumpDiagnostic struct {
 	// DumpsIncludeSensitive is true if the configuration dump includes sensitive values, such as certificate private
 	// keys and credential secrets.
 	DumpsIncludeSensitive bool
 	// Configs is the channel that receives configuration blobs from the configuration update strategy implementation.
-	Configs chan ConfigDump
+	Configs   chan ConfigDump
+	Fallbacks chan FallbackDiagnosticCollection
 }
 
 // AffectedObject is a Kubernetes object associated with diagnostic information.

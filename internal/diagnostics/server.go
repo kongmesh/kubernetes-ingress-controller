@@ -36,10 +36,12 @@ type Server struct {
 	successfulConfigDump file.Content
 	failedConfigDump     file.Content
 	problemObjects       []AffectedObject
+	fallback             FallbackDiagnosticCollection
 	failedHash           string
 	successHash          string
 	rawErrBody           []byte
 	configLock           *sync.RWMutex
+	fallbackLock         *sync.RWMutex
 }
 
 // ServerConfig contains configuration for the diagnostics server.
@@ -66,6 +68,7 @@ func NewServer(logger logr.Logger, cfg ServerConfig) Server {
 		s.configDumps = ConfigDumpDiagnostic{
 			DumpsIncludeSensitive: cfg.DumpSensitiveConfig,
 			Configs:               make(chan ConfigDump, diagnosticConfigBufferDepth),
+			Fallbacks:             make(chan FallbackDiagnosticCollection, diagnosticConfigBufferDepth),
 		}
 	}
 
@@ -134,6 +137,10 @@ func (s *Server) receiveConfig(ctx context.Context) {
 				s.successHash = dump.Meta.Hash
 			}
 			s.configLock.Unlock()
+		case fallback := <-s.configDumps.Fallbacks:
+			s.fallbackLock.Lock()
+			s.fallback = fallback
+			s.fallbackLock.Unlock()
 		case <-ctx.Done():
 			if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
 				s.logger.Error(err, "Shutting down diagnostic config collection: context completed with error")
@@ -165,6 +172,7 @@ func (s *Server) installDumpHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/config/successful", s.handleLastValidConfig)
 	mux.HandleFunc("/debug/config/failed", s.handleLastFailedConfig)
 	mux.HandleFunc("/debug/config/problems", s.handleLastFailedProblemObjects)
+	mux.HandleFunc("/debug/config/fallback", s.handleLastFallback)
 	mux.HandleFunc("/debug/config/raw-error", s.handleLastErrBody)
 }
 
@@ -209,6 +217,19 @@ func (s *Server) handleLastFailedProblemObjects(rw http.ResponseWriter, _ *http.
 		problemObjectsResponse{
 			ConfigHash:    s.failedHash,
 			BrokenObjects: s.problemObjects,
+		}); err != nil {
+		rw.WriteHeader(http.StatusOK)
+	}
+}
+
+func (s *Server) handleLastFallback(rw http.ResponseWriter, _ *http.Request) {
+	rw.Header().Set("Content-Type", "application/json")
+	s.configLock.RLock()
+	defer s.configLock.RUnlock()
+	if err := json.NewEncoder(rw).Encode(
+		fallbackResponse{
+			ConfigHash:      s.fallback.ConfigHash,
+			FallbackObjects: s.fallback.Objects,
 		}); err != nil {
 		rw.WriteHeader(http.StatusOK)
 	}

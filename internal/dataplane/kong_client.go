@@ -70,12 +70,15 @@ type KongConfigBuilder interface {
 
 // FallbackConfigGenerator generates a fallback configuration based on a cache snapshot and a set of broken objects.
 type FallbackConfigGenerator interface {
-	GenerateExcludingBrokenObjects(store.CacheStores, []fallback.ObjectHash) (store.CacheStores, error)
+	GenerateExcludingBrokenObjects(
+		store.CacheStores,
+		[]fallback.ObjectHash,
+	) (store.CacheStores, []diagnostics.FallbackDiagnostic, error)
 	GenerateBackfillingBrokenObjects(
 		currentCache store.CacheStores,
 		lastValidCache store.CacheStores,
 		brokenObjects []fallback.ObjectHash,
-	) (store.CacheStores, error)
+	) (store.CacheStores, []diagnostics.FallbackDiagnostic, error)
 }
 
 // KongClient is a threadsafe high level API client for the Kong data-plane(s)
@@ -489,7 +492,14 @@ func (c *KongClient) Update(ctx context.Context) error {
 
 	// In case of a failure in syncing configuration with Gateways, propagate the error.
 	if gatewaysSyncErr != nil {
-		if recoveringErr := c.tryRecoveringFromGatewaysSyncError(ctx, cacheSnapshot, gatewaysSyncErr); recoveringErr != nil {
+		if recoveringErr := c.tryRecoveringFromGatewaysSyncError(
+			ctx,
+			cacheSnapshot,
+			gatewaysSyncErr,
+			// there are actually multiple returned hashes, and there can apparently be _no_ returned hashes,
+			// so this either can't align to those like the other endpoints or needs to pipe it in from elsewhere
+			"TODO",
+		); recoveringErr != nil {
 			return fmt.Errorf("failed to recover from gateways sync error: %w", recoveringErr)
 		}
 		// Update result is positive only if gateways were successfully synced with the current config, so we still
@@ -532,11 +542,12 @@ func (c *KongClient) tryRecoveringFromGatewaysSyncError(
 	ctx context.Context,
 	cacheSnapshot store.CacheStores,
 	gatewaysSyncErr error,
+	hash string,
 ) error {
 	// If configuration was rejected by the gateways and FallbackConfiguration is enabled,
 	// we should generate a fallback configuration and push it to the gateways.
 	if c.kongConfig.FallbackConfiguration {
-		recoveringErr := c.tryRecoveringWithFallbackConfiguration(ctx, cacheSnapshot, gatewaysSyncErr)
+		recoveringErr := c.tryRecoveringWithFallbackConfiguration(ctx, cacheSnapshot, gatewaysSyncErr, hash)
 		if recoveringErr == nil {
 			c.logger.Info("Successfully recovered from configuration rejection with fallback configuration")
 			return nil
@@ -567,6 +578,7 @@ func (c *KongClient) tryRecoveringWithFallbackConfiguration(
 	ctx context.Context,
 	currentCache store.CacheStores,
 	gatewaysSyncErr error,
+	hash string,
 ) error {
 	// Extract the broken objects from the update error and generate a fallback configuration excluding them.
 	brokenObjects, err := extractBrokenObjectsFromUpdateError(gatewaysSyncErr)
@@ -575,10 +587,11 @@ func (c *KongClient) tryRecoveringWithFallbackConfiguration(
 	}
 
 	// Generate a fallback cache snapshot.
-	fallbackCache, err := c.generateFallbackCache(currentCache, brokenObjects)
+	fallbackCache, fallbackDiag, err := c.generateFallbackCache(currentCache, brokenObjects)
 	if err != nil {
 		return fmt.Errorf("failed to generate fallback configuration: %w", err)
 	}
+	c.diagnostic.Fallbacks <- diagnostics.FallbackDiagnosticCollection{ConfigHash: hash, Objects: fallbackDiag}
 
 	// Update the KongConfigBuilder with the fallback configuration and build the KongConfig.
 	c.kongConfigBuilder.UpdateCache(fallbackCache)
@@ -617,7 +630,7 @@ func (c *KongClient) tryRecoveringWithFallbackConfiguration(
 func (c *KongClient) generateFallbackCache(
 	currentCache store.CacheStores,
 	brokenObjects []fallback.ObjectHash,
-) (s store.CacheStores, err error) {
+) (s store.CacheStores, diag []diagnostics.FallbackDiagnostic, err error) {
 	start := time.Now()
 	defer func() {
 		c.prometheusMetrics.RecordFallbackCacheGenerationDuration(time.Since(start), err)
