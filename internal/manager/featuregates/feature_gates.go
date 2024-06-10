@@ -39,6 +39,9 @@ const (
 	// https://github.com/Kong/kubernetes-ingress-controller/issues/6124
 	KongCustomEntity = "KongCustomEntity"
 
+	// SkipKonnectConsumersSync is the name of the feature-gate that skips syncing consumers' credentials to Konnect.
+	SkipKonnectConsumersSync = "SkipKonnectConsumersSync"
+
 	// DocsURL provides a link to the documentation for feature gates in the KIC repository.
 	DocsURL = "https://github.com/Kong/kubernetes-ingress-controller/blob/main/FEATURE_GATES.md"
 )
@@ -86,5 +89,6 @@ func GetFeatureGatesDefaults() FeatureGates {
 		SanitizeKonnectConfigDumps: true,
 		FallbackConfiguration:      false,
 		KongCustomEntity:           false,
+		SkipKonnectConsumersSync:   false,
 	}
 }

@@ -41,4 +41,7 @@ type Config struct {
 	// UseLastValidConfigForFallback indicates whether to use the last valid config cache to backfill broken objects
 	// when recovering from a config push failure.
 	UseLastValidConfigForFallback bool
+
+	// SkipKonnectConsumersSync indicates whether to skip syncing consumers to Konnect.
+	SkipKonnectConsumersSync bool
 }

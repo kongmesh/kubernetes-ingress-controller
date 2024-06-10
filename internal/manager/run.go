@@ -125,6 +125,7 @@ func Run(
 		SanitizeKonnectConfigDumps:    featureGates.Enabled(featuregates.SanitizeKonnectConfigDumps),
 		FallbackConfiguration:         featureGates.Enabled(featuregates.FallbackConfiguration),
 		UseLastValidConfigForFallback: c.UseLastValidConfigForFallback,
+		SkipKonnectConsumersSync:      featureGates.Enabled(featuregates.SkipKonnectConsumersSync),
 	}
 
 	setupLog.Info("Configuring and building the controller manager")
