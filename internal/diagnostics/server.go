@@ -137,10 +137,10 @@ func (s *Server) receiveConfig(ctx context.Context) {
 				s.successHash = dump.Meta.Hash
 			}
 			s.configLock.Unlock()
-		case fallback := <-s.configDumps.Fallbacks:
-			s.fallbackLock.Lock()
-			s.fallback = fallback
-			s.fallbackLock.Unlock()
+		// case fallback := <-s.configDumps.Fallbacks:
+		// 	s.fallbackLock.Lock()
+		// 	s.fallback = fallback
+		// 	s.fallbackLock.Unlock()
 		case <-ctx.Done():
 			if err := ctx.Err(); err != nil && !errors.Is(err, context.Canceled) {
 				s.logger.Error(err, "Shutting down diagnostic config collection: context completed with error")
@@ -228,7 +228,6 @@ func (s *Server) handleLastFallback(rw http.ResponseWriter, _ *http.Request) {
 	defer s.configLock.RUnlock()
 	if err := json.NewEncoder(rw).Encode(
 		fallbackResponse{
-			ConfigHash:      s.fallback.ConfigHash,
 			FallbackObjects: s.fallback.Objects,
 		}); err != nil {
 		rw.WriteHeader(http.StatusOK)

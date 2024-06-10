@@ -496,9 +496,6 @@ func (c *KongClient) Update(ctx context.Context) error {
 			ctx,
 			cacheSnapshot,
 			gatewaysSyncErr,
-			// there are actually multiple returned hashes, and there can apparently be _no_ returned hashes,
-			// so this either can't align to those like the other endpoints or needs to pipe it in from elsewhere
-			"TODO",
 		); recoveringErr != nil {
 			return fmt.Errorf("failed to recover from gateways sync error: %w", recoveringErr)
 		}
@@ -542,12 +539,11 @@ func (c *KongClient) tryRecoveringFromGatewaysSyncError(
 	ctx context.Context,
 	cacheSnapshot store.CacheStores,
 	gatewaysSyncErr error,
-	hash string,
 ) error {
 	// If configuration was rejected by the gateways and FallbackConfiguration is enabled,
 	// we should generate a fallback configuration and push it to the gateways.
 	if c.kongConfig.FallbackConfiguration {
-		recoveringErr := c.tryRecoveringWithFallbackConfiguration(ctx, cacheSnapshot, gatewaysSyncErr, hash)
+		recoveringErr := c.tryRecoveringWithFallbackConfiguration(ctx, cacheSnapshot, gatewaysSyncErr)
 		if recoveringErr == nil {
 			c.logger.Info("Successfully recovered from configuration rejection with fallback configuration")
 			return nil
@@ -578,7 +574,6 @@ func (c *KongClient) tryRecoveringWithFallbackConfiguration(
 	ctx context.Context,
 	currentCache store.CacheStores,
 	gatewaysSyncErr error,
-	hash string,
 ) error {
 	// Extract the broken objects from the update error and generate a fallback configuration excluding them.
 	brokenObjects, err := extractBrokenObjectsFromUpdateError(gatewaysSyncErr)
@@ -591,7 +586,9 @@ func (c *KongClient) tryRecoveringWithFallbackConfiguration(
 	if err != nil {
 		return fmt.Errorf("failed to generate fallback configuration: %w", err)
 	}
-	c.diagnostic.Fallbacks <- diagnostics.FallbackDiagnosticCollection{ConfigHash: hash, Objects: fallbackDiag}
+	if c.diagnostic.Fallbacks != nil {
+		c.diagnostic.Fallbacks <- diagnostics.FallbackDiagnosticCollection{Objects: fallbackDiag}
+	}
 
 	// Update the KongConfigBuilder with the fallback configuration and build the KongConfig.
 	c.kongConfigBuilder.UpdateCache(fallbackCache)

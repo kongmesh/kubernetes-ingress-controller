@@ -38,14 +38,12 @@ type problemObjectsResponse struct {
 }
 
 type fallbackResponse struct {
-	ConfigHash      string               `json:"hash"`
 	FallbackObjects []FallbackDiagnostic `json:"objects"`
 }
 
 // FallbackDiagnosticCollection is a set of fallback object diagnostics associated with a config hash.
 type FallbackDiagnosticCollection struct {
-	ConfigHash string
-	Objects    []FallbackDiagnostic
+	Objects []FallbackDiagnostic
 }
 
 // FallbackDiagnostic are fallback objects.
